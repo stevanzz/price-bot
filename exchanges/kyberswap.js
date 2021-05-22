@@ -1,9 +1,12 @@
-// Kyber mainnet "Expected Rate": https://etherscan.io/address/0x96b610046d63638d970e6243151311d8827d69a5#readContract
-const Web3 = require("web3");
-const web3 = new Web3(process.env.RPC_URL);
+const { web3, NETWORK } = require("../web3.js");
 
 const KYBER_RATE_ADDRESS = "0x96b610046d63638d970e6243151311d8827d69a5";
-const KYBER_NETWORK_PROXY = "0x818e6fecd516ecc3849daf6845e3ec868087b755";
+
+// using Kyber Proxy
+const KYBER_FACTORY_ADDRESS = {
+  mainnet: "0x9AAb3f75489902f3a48495025729a0AF77d4b11e",
+  ropsten: "0xd719c34261e099Fdb33030ac8909d5788D3039C4",
+}
 
 const KYBER_RATE_ABI = [
   {
@@ -345,15 +348,31 @@ const KYBER_NETWORK_PROXY_ABI = [
   },
   {
     inputs: [
-      { internalType: "contract ERC20", name: "src", type: "address" },
-      { internalType: "contract ERC20", name: "dest", type: "address" },
-      { internalType: "uint256", name: "srcQty", type: "uint256" },
+      {
+        name: "src",
+        type: "address",
+      },
+      {
+        name: "dest",
+        type: "address",
+      },
+      {
+        name: "srcQty",
+        type: "uint256",
+      },
     ],
     name: "getExpectedRate",
     outputs: [
-      { internalType: "uint256", name: "expectedRate", type: "uint256" },
-      { internalType: "uint256", name: "worstRate", type: "uint256" },
+      {
+        name: "expectedRate",
+        type: "uint256",
+      },
+      {
+        name: "slippageRate",
+        type: "uint256",
+      },
     ],
+    payable: false,
     stateMutability: "view",
     type: "function",
   },
@@ -434,7 +453,26 @@ const kyberRateContract = new web3.eth.Contract(
   // KYBER_RATE_ABI,
   // KYBER_RATE_ADDRESS
   KYBER_NETWORK_PROXY_ABI,
-  KYBER_NETWORK_PROXY
+  KYBER_FACTORY_ADDRESS[NETWORK]
 );
 
-module.exports = { kyberRateContract };
+async function getKyberRate(data) {
+  const {
+    inputTokenSymbol,
+    inputTokenAddress,
+    outputTokenSymbol,
+    outputTokenAddress,
+    inputAmount,
+  } = data;
+  try {
+    const kyberResult = await kyberRateContract.methods
+      .getExpectedRate(inputTokenAddress, outputTokenAddress, inputAmount)
+      .call();
+    return kyberResult;
+  } catch (error) {
+    error.message = `[getKyberRate][${inputTokenSymbol} to ${outputTokenSymbol}] ${error.message}`;
+    throw error;
+  }
+}
+
+module.exports = { getKyberRate };

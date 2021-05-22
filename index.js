@@ -1,8 +1,18 @@
 require("dotenv").config();
+
+// WEB3
+const { web3, NETWORK } = require("./web3.js");
+
+// TOKEN MAPPINGS
+const { tokenMap } = require("./token-address.js");
+
+// EXCHANGES
+const { getKyberRate } = require("./exchanges/kyberswap.js");
+const { getUniswapRate } = require("./exchanges/uniswap.js");
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const http = require("http");
-const Web3 = require("web3");
 const HDWalletProvider = require("@truffle/hdwallet-provider");
 const moment = require("moment-timezone");
 const numeral = require("numeral");
@@ -16,121 +26,71 @@ const server = http
   .createServer(app)
   .listen(PORT, () => console.log(`Listening on ${PORT}`));
 
-// WEB3 CONFIG
-const web3 = new Web3(process.env.RPC_URL);
-
-// EXCHANGE
-const { kyberRateContract } = require("./exchange/kyber.js");
-const {
-  uniswapFactoryContract,
-  UNISWAP_EXCHANGE_ABI,
-} = require("./exchange/uniswap.js");
+// User Details
+// const PRIVATE_KEY = Buffer.from(process.env.PRIVATE_KEY, "hex"); //exclude 0x prefix
+// const USER_ADDRESS = web3.eth.accounts.privateKeyToAccount(
+//   "0x" + PRIVATE_KEY.toString("hex")
+// ).address;
+// console.log(USER_ADDRESS)
 
 // Minimum ETH to swap
 const ETH_AMOUNT = web3.utils.toWei("1", "ETHER");
+const DEADLINE = 1742680400;
+const inputTokenSymbol = "ETH";
+const inputTokenAddress = tokenMap[NETWORK][inputTokenSymbol];
 
-async function checkPair(args) {
-  const {
-    inputTokenSymbol,
-    inputTokenAddress,
-    outputTokenSymbol,
-    outputTokenAddress,
-    inputAmount,
-  } = args;
-
-  const exchangeAddress = await uniswapFactoryContract.methods
-    .getExchange(outputTokenAddress)
-    .call();
-  const exchangeContract = new web3.eth.Contract(
-    UNISWAP_EXCHANGE_ABI,
-    exchangeAddress
-  );
-
-  const uniswapResult = await exchangeContract.methods
-    .getEthToTokenInputPrice(inputAmount)
-    .call();
-  let kyberResult = await kyberRateContract.methods
-    .getExpectedRate(
-      inputTokenAddress,
-      outputTokenAddress,
-      inputAmount.toString()
-    )
-    .call();
-
-  console.table([
-    {
-      "Input Token": inputTokenSymbol,
-      "Output Token": outputTokenSymbol,
-      "Input Amount": web3.utils.fromWei(inputAmount, "Ether"),
-      "Uniswap Return": web3.utils.fromWei(uniswapResult, "Ether"),
-      "Kyber Expected Rate": web3.utils.fromWei(
-        kyberResult.expectedRate,
-        "Ether"
-      ),
-      "Kyber Min Return": web3.utils.fromWei(kyberResult.worstRate, "Ether"),
-      // Timestamp: moment().tz("America/Chicago").format(),
-    },
-  ]);
-}
-
-let priceMonitor;
-let monitoringPrice = false;
-
-async function monitorPrice() {
-  if (monitoringPrice) {
-    return;
-  }
-
-  monitoringPrice = true;
-
+async function checkPair(outputTokenSymbol) {
   try {
-    // ADD YOUR CUSTOM TOKEN PAIRS HERE!!!
+    if (Object.keys(tokenMap[NETWORK]).includes(outputTokenSymbol)) {
+      const outputTokenAddress = tokenMap[NETWORK][outputTokenSymbol];
 
-    await checkPair({
-      inputTokenSymbol: "ETH",
-      inputTokenAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      outputTokenSymbol: "MKR",
-      outputTokenAddress: "0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2",
-      inputAmount: ETH_AMOUNT,
-    });
+      data = {
+        inputTokenSymbol,
+        inputTokenAddress,
+        outputTokenSymbol,
+        outputTokenAddress,
+        inputAmount: ETH_AMOUNT,
+      };
 
-    await checkPair({
-      inputTokenSymbol: "ETH",
-      inputTokenAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      outputTokenSymbol: "DAI",
-      outputTokenAddress: "0x6b175474e89094c44da98b954eedeac495271d0f",
-      inputAmount: ETH_AMOUNT,
-    });
+      // Get UniSwap rate
+      const uniswapResult = await getUniswapRate(data);
 
-    await checkPair({
-      inputTokenSymbol: "ETH",
-      inputTokenAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      outputTokenSymbol: "KNC",
-      outputTokenAddress: "0xdd974d5c2e2928dea5f71b9825b8b646686bd200",
-      inputAmount: ETH_AMOUNT,
-    });
+      // Get KyberSwap rate
+      const kyberResult = await getKyberRate(data);
 
-    await checkPair({
-      inputTokenSymbol: "ETH",
-      inputTokenAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      outputTokenSymbol: "LINK",
-      outputTokenAddress: "0x514910771af9ca656af840dff83e8264ecf986ca",
-      inputAmount: ETH_AMOUNT,
-    });
+      console.table([
+        {
+          "Input Token": inputTokenSymbol,
+          "Output Token": outputTokenSymbol,
+          "Input Amount": web3.utils.fromWei(ETH_AMOUNT, "Ether"),
+          "Uniswap Return": uniswapResult
+            ? web3.utils.fromWei(uniswapResult, "Ether")
+            : "N/A",
+          "Kyber Expected Rate":
+            kyberResult && kyberResult.expectedRate
+              ? web3.utils.fromWei(kyberResult.expectedRate, "Ether")
+              : "N/A",
+          "Kyber Min Return":
+            kyberResult && kyberResult.slippageRate
+              ? web3.utils.fromWei(kyberResult.slippageRate, "Ether")
+              : "N/A",
+          // Timestamp: moment().tz("America/Chicago").format(),
+        },
+      ]);
+    } else {
+      console.warn(`${outputTokenSymbol} not found in token map`);
+    }
   } catch (error) {
     console.error(error);
-    monitoringPrice = false;
     clearInterval(priceMonitor);
-    return;
   }
-
-  monitoringPrice = false;
 }
 
 // Check markets every n seconds
-const POLLING_INTERVAL = process.env.POLLING_INTERVAL || 3000; // 3 Seconds
-priceMonitor = setInterval(async () => {
-  await monitorPrice();
+const POLLING_INTERVAL = process.env.POLLING_INTERVAL || 5000;
+priceMonitor = setInterval(() => {
+  const monitorTokens = ["DAI"];
+  monitorTokens.forEach(async (token) => await checkPair(token));
 }, POLLING_INTERVAL);
 
 // Function to get gas limit for trading

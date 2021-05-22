@@ -1,8 +1,9 @@
-// Uniswap Factory Contract: https://etherscan.io/address/0xc0a47dfe034b400b47bdad5fecda2621de6c4d95#code
-const Web3 = require("web3");
-const web3 = new Web3(process.env.RPC_URL);
+const { web3, NETWORK } = require("../web3.js");
 
-const UNISWAP_FACTORY_ADDRESS = "0xc0a47dfe034b400b47bdad5fecda2621de6c4d95";
+const UNISWAP_FACTORY_ADDRESS = {
+  mainnet: "0xc0a47dfe034b400b47bdad5fecda2621de6c4d95",
+  ropsten: "0x9c83dCE8CA20E9aAF9D3efc003b2ea62aBC08351",
+};
 
 const UNISWAP_FACTORY_ABI = [
   {
@@ -81,7 +82,7 @@ const UNISWAP_FACTORY_ABI = [
 
 const uniswapFactoryContract = new web3.eth.Contract(
   UNISWAP_FACTORY_ABI,
-  UNISWAP_FACTORY_ADDRESS
+  UNISWAP_FACTORY_ADDRESS[NETWORK]
 );
 
 // Uniswap Exchange Template: https://etherscan.io/address/0x09cabec1ead1c0ba254b09efb3ee13841712be14#code
@@ -571,4 +572,37 @@ const UNISWAP_EXCHANGE_ABI = [
   },
 ];
 
-module.exports = { uniswapFactoryContract, UNISWAP_EXCHANGE_ABI };
+async function getUniswapRate(data) {
+  const {
+    inputTokenSymbol,
+    outputTokenSymbol,
+    outputTokenAddress,
+    inputAmount,
+  } = data;
+  try {
+    const exchangeAddress = await uniswapFactoryContract.methods
+      .getExchange(outputTokenAddress)
+      .call();
+    if (exchangeAddress === "0x0000000000000000000000000000000000000000") {
+      console.warn(
+        `[getUniswapRate][${inputTokenSymbol} to ${outputTokenSymbol}] Exchange not found`
+      );
+      return;
+    }
+    const exchangeContract = new web3.eth.Contract(
+      UNISWAP_EXCHANGE_ABI,
+      exchangeAddress
+    );
+    const uniswapResult = await exchangeContract.methods
+      .getEthToTokenInputPrice(inputAmount)
+      .call();
+    return uniswapResult;
+  } catch (error) {
+    error.message = `[getUniswapRate][${inputTokenSymbol} to ${outputTokenSymbol}] ${error.message}`;
+    throw error;
+  }
+}
+
+module.exports = {
+  getUniswapRate,
+};
